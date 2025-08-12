@@ -1,113 +1,131 @@
-import os
-import sys
-import json
-
 import torch
-import torch.nn as nn
-import torch.optim as optim
-from torchvision import transforms, datasets
-from tqdm import tqdm
+import torchvision
+from torch import nn
+from torch.utils.data import DataLoader
+from torchvision import models, transforms
 
-from model import resnet34
+# 数据预处理
+data_transform = {
+    'train': transforms.Compose([
+        transforms.RandomResizedCrop(224),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    ]),
+    'val': transforms.Compose([
+        transforms.Resize(256),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    ]),
+}
 
 
 def main():
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    print("using {} device.".format(device))
-
-    data_transform = {
-        "train": transforms.Compose([transforms.RandomResizedCrop(224),
-                                     transforms.RandomHorizontalFlip(),
-                                     transforms.ToTensor(),
-                                     transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])]),
-        "val": transforms.Compose([transforms.Resize(256),
-                                   transforms.CenterCrop(224),
-                                   transforms.ToTensor(),
-                                   transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])}
-
-    # 数据集路径
+    # 加载本地数据集
     train_dir = r'D:\resnet\supervised_fault_classification\defect_supervised\glass-insulator\train'
     test_dir = r'D:\resnet\supervised_fault_classification\defect_supervised\glass-insulator\val'
 
     # 加载训练数据集
-    trainset = datasets.ImageFolder(root=train_dir, transform=data_transform["train"])
-    trainloader = torch.utils.data.DataLoader(trainset, batch_size=4, shuffle=True, num_workers=2)
+    train_data = torchvision.datasets.ImageFolder(root=train_dir, transform=data_transform["train"])
+    train_dataloader = DataLoader(train_data, batch_size=4, shuffle=True, num_workers=2)
 
     # 加载测试集数据
-    testset = datasets.ImageFolder(root=test_dir, transform=data_transform["val"])
-    testloader = torch.utils.data.DataLoader(testset, batch_size=4, shuffle=False, num_workers=2)
+    test_data = torchvision.datasets.ImageFolder(root=test_dir, transform=data_transform["val"])
+    test_dataloader = DataLoader(test_data, batch_size=4, shuffle=False, num_workers=2)
 
-    classes = trainset.classes
+    train_data_size = len(train_data)
+    test_data_size = len(test_data)
+    print("The size of Train_data is {}".format(train_data_size))
+    print("The size of Test_data is {}".format(test_data_size))
 
-    net = resnet34()
-    # load pretrain weights
-    # download url: https://download.pytorch.org/models/resnet34-333f7ec4.pth
-    model_weight_path = "./resnet34-pre.pth"
-    assert os.path.exists(model_weight_path), "file {} does not exist.".format(model_weight_path)
-    net.load_state_dict(torch.load(model_weight_path, map_location='cpu'))
-    # for param in net.parameters():
-    #     param.requires_grad = False
+    # 加载预训练的ResNet50模型
+    resnet50 = models.resnet50(pretrained=True)
+    num_ftrs = resnet50.fc.in_features
 
-    # change fc layer structure
-    in_channel = net.fc.in_features
-    net.fc = nn.Linear(in_channel, 2)  # 修改为2类
-    net.to(device)
+    # 冻结模型的参数
+    for param in resnet50.parameters():
+        param.requires_grad = False
 
-    # define loss function
-    loss_function = nn.CrossEntropyLoss()
+    # 修改最后一层以适应新的类别数量
+    resnet50.fc = nn.Sequential(nn.Linear(num_ftrs, len(train_data.classes)),
+                                nn.LogSoftmax(dim=1))
 
-    # construct an optimizer
-    params = [p for p in net.parameters() if p.requires_grad]
-    optimizer = optim.Adam(params, lr=0.0001)
+    # 将模型移动到指定设备（GPU或CPU）
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    resnet50.to(device)
 
-    epochs = 3
-    best_acc = 0.0
-    save_path = './resNet34_glass_insulator.pth'
-    train_steps = len(trainloader)
-    val_num = len(testset)
+    # 定义损失函数
+    loss_fn = nn.CrossEntropyLoss().to(device)
+
+    # 定义优化器
+    learning_rate = 0.01
+    optimizer = torch.optim.SGD(resnet50.parameters(), lr=learning_rate)
+
+    # 设置网络训练的一些参数
+    # 记录训练的次数
+    total_train_step = 0
+    # 记录测试的次数
+    total_test_step = 0
+    # 训练的轮数
+    epochs = 1
+
+    best_accuracy = 0.0
+
     for epoch in range(epochs):
-        # train
-        net.train()
-        running_loss = 0.0
-        train_bar = tqdm(trainloader, file=sys.stdout)
-        for step, data in enumerate(train_bar):
-            images, labels = data
+        print("-------第{}轮训练开始-------".format(epoch + 1))
+
+        # 训练步骤开始
+        resnet50.train()
+        for data in train_dataloader:
+            imgs, targets = data
+            imgs = imgs.to(device)
+            targets = targets.to(device)
+
+            outputs = resnet50(imgs)
+            loss = loss_fn(outputs, targets)
+
+            # 优化器优化模型
             optimizer.zero_grad()
-            logits = net(images.to(device))
-            loss = loss_function(logits, labels.to(device))
             loss.backward()
             optimizer.step()
 
-            # print statistics
-            running_loss += loss.item()
+            total_train_step += 1
+            if total_train_step % 100 == 0:
+                print("训练次数：{}, Loss: {:.4f}".format(total_train_step, loss.item()))
 
-            train_bar.desc = "train epoch[{}/{}] loss:{:.3f}".format(epoch + 1,
-                                                                     epochs,
-                                                                     loss)
+        # 测试集
+        resnet50.eval()
+        total_test_loss = 0
+        correct = 0
 
-        # validate
-        net.eval()
-        acc = 0.0  # accumulate accurate number / epoch
         with torch.no_grad():
-            val_bar = tqdm(testloader, file=sys.stdout)
-            for val_data in val_bar:
-                val_images, val_labels = val_data
-                outputs = net(val_images.to(device))
-                predict_y = torch.max(outputs, dim=1)[1]
-                acc += torch.eq(predict_y, val_labels.to(device)).sum().item()
+            for data in test_dataloader:
+                imgs, targets = data
+                imgs = imgs.to(device)
+                targets = targets.to(device)
 
-                val_bar.desc = "valid epoch[{}/{}]".format(epoch + 1,
-                                                           epochs)
+                outputs = resnet50(imgs)
+                loss = loss_fn(outputs, targets)
+                total_test_loss += loss.item()
 
-        val_accurate = acc / val_num
-        print('[epoch %d] train_loss: %.3f  val_accuracy: %.3f' %
-              (epoch + 1, running_loss / train_steps, val_accurate))
+                _, predicted = torch.max(outputs, 1)
+                correct += (predicted == targets).sum().item()
+                total_test_step += 1
 
-        if val_accurate > best_acc:
-            best_acc = val_accurate
-            torch.save(net.state_dict(), save_path)
+        average_test_loss = total_test_loss / len(test_dataloader)
+        accuracy = correct / test_data_size
 
-    print('Finished Training')
+        print(
+            "测试次数：{}, 测试Loss: {:.4f}, 准确率: {:.4f}%".format(total_test_step, average_test_loss, accuracy * 100))
+
+        # 保存最佳模型
+        if accuracy > best_accuracy:
+            best_accuracy = accuracy
+            torch.save(resnet50.state_dict(), 'best_resnet50.pth')
+            print(f"保存了更好的模型，准确率为 {accuracy * 100:.4f}%")
+
+    print("训练完成")
 
 
 if __name__ == '__main__':
