@@ -1,134 +1,158 @@
-import torch
-import torchvision
-from torch import nn
-from torch.utils.data import DataLoader
-from torchvision import models, transforms
+import os  # 导入os模块，用于文件和目录操作
+import torch  # 导入torch库，用于构建神经网络
+import torchvision  # 导入torchvision库，用于数据集和预训练模型
+from torch import nn  # 导入torch的nn模块，用于定义神经网络层
+from torch.utils.data import DataLoader  # 导入DataLoader，用于加载数据
+from torchvision import models, transforms  # 导入torchvision的models和transforms模块，用于预训练模型和数据转换
+import logging  # 导入logging模块，用于日志记录
+
+# 设置随机种子以确保结果可重复
+torch.manual_seed(42)  # 设置全局随机种子为42
+if torch.cuda.is_available():  # 检查是否有可用的CUDA设备
+    torch.cuda.manual_seed_all(42)  # 设置所有CUDA设备的随机种子为42
+
+# 配置日志记录
+logging.basicConfig(filename='training.log', level=logging.INFO,  # 配置日志记录，写入到'training.log'文件，日志级别为INFO
+                    format='%(asctime)s - %(levelname)s - %(message)s')  # 日志格式包括时间、日志级别和消息
 
 # 数据预处理
-data_transform = {
-    'train': transforms.Compose([
-        transforms.RandomResizedCrop(224),
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+data_transform = {  # 定义数据预处理步骤
+    'train': transforms.Compose([  # 训练数据预处理
+        transforms.RandomResizedCrop(224),  # 随机裁剪并调整大小为224x224
+        transforms.RandomHorizontalFlip(),  # 随机水平翻转
+        transforms.ToTensor(),  # 将图像转换为tensor
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])  # 标准化图像
     ]),
-    'val': transforms.Compose([
-        transforms.Resize(256),
-        transforms.CenterCrop(224),
-        transforms.ToTensor(),
-        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    'val': transforms.Compose([  # 测试数据预处理
+        transforms.Resize(256),  # 调整大小为256x256
+        transforms.CenterCrop(224),  # 中心裁剪为224x224
+        transforms.ToTensor(),  # 将图像转换为tensor
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])  # 标准化图像
     ]),
 }
 
-
 def main():
     # 加载本地数据集
-    train_dir = r'D:\resnet\supervised_fault_classification\defect_supervised\glass-insulator\train'
-    test_dir = r'D:\resnet\supervised_fault_classification\defect_supervised\glass-insulator\val'
+    train_dir = r'F:\AI\cv\UAV-Based Power Equipment Classification (UPEC)\Dataset\supervised_fault_classification\defect_supervised\glass-insulator\train'  # 训练数据集路径
+    test_dir = r'F:\AI\cv\UAV-Based Power Equipment Classification (UPEC)\Dataset\supervised_fault_classification\defect_supervised\glass-insulator\val'  # 测试数据集路径
 
     # 加载训练数据集
-    train_data = torchvision.datasets.ImageFolder(root=train_dir, transform=data_transform["train"])
-    train_dataloader = DataLoader(train_data, batch_size=4, shuffle=True, num_workers=2)
+    train_data = torchvision.datasets.ImageFolder(root=train_dir, transform=data_transform["train"])  # 加载训练数据集，并应用预处理
+    train_dataloader = DataLoader(train_data, batch_size=4, shuffle=True, num_workers=0)  # 创建训练数据加载器，批量大小为4，打乱数据，使用2个工作进程
 
     # 加载测试集数据
-    test_data = torchvision.datasets.ImageFolder(root=test_dir, transform=data_transform["val"])
-    test_dataloader = DataLoader(test_data, batch_size=4, shuffle=False, num_workers=2)
+    test_data = torchvision.datasets.ImageFolder(root=test_dir, transform=data_transform["val"])  # 加载测试数据集，并应用预处理
+    test_dataloader = DataLoader(test_data, batch_size=4, shuffle=False, num_workers=0)  # 创建测试数据加载器，批量大小为4，不打乱数据，使用2个工作进程
 
-    train_data_size = len(train_data)
-    test_data_size = len(test_data)
-    print("The size of Train_data is {}".format(train_data_size))
-    print("The size of Test_data is {}".format(test_data_size))
+    train_data_size = len(train_data)  # 获取训练数据集大小
+    test_data_size = len(test_data)  # 获取测试数据集大小
+    print("The size of Train_data is {}".format(train_data_size))  # 打印训练数据集大小
+    logging.info("The size of Train_data is {}".format(train_data_size))  # 记录训练数据集大小到日志
+    print("The size of Test_data is {}".format(test_data_size))  # 打印测试数据集大小
+    logging.info("The size of Test_data is {}".format(test_data_size))  # 记录测试数据集大小到日志
 
     # 加载预训练的ResNet50模型
-    resnet50 = models.resnet50(pretrained=True)
-    num_ftrs = resnet50.fc.in_features
+    resnet50 = models.resnet50(pretrained=True)  # 加载预训练的ResNet50模型
+    num_ftrs = resnet50.fc.in_features  # 获取原始全连接层的输入特征数
 
     # 冻结模型的参数
-    for param in resnet50.parameters():
-        param.requires_grad = False
+    for param in resnet50.parameters():  # 遍历模型的所有参数
+        param.requires_grad = False  # 将所有参数设置为不需要梯度更新（冻结）
 
     # 修改最后一层以适应新的类别数量
-    resnet50.fc = nn.Sequential(nn.Linear(num_ftrs, len(train_data.classes)),
-                                nn.LogSoftmax(dim=1))
+    resnet50.fc = nn.Sequential(nn.Linear(num_ftrs, len(train_data.classes)),  # 替换最后一层为新的线性层，输出维度为类别数量
+                                nn.LogSoftmax(dim=1))  # 添加LogSoftmax激活函数
 
     # 将模型移动到指定设备（GPU或CPU）
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    resnet50.to(device)
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")  # 设置设备为GPU或CPU
+    resnet50.to(device)  # 将模型移动到指定设备
 
     # 定义损失函数
-    loss_fn = nn.CrossEntropyLoss().to(device)
+    loss_fn = nn.CrossEntropyLoss().to(device)  # 使用交叉熵损失函数，并将其移动到指定设备
 
     # 定义优化器
-    learning_rate = 0.01
-    optimizer = torch.optim.SGD(resnet50.parameters(), lr=learning_rate)
+    learning_rate = 0.01  # 设置学习率为0.01
+    optimizer = torch.optim.SGD(resnet50.parameters(), lr=learning_rate)  # 使用SGD优化器
 
     # 设置网络训练的一些参数
     # 记录训练的次数
-    total_train_step = 0
+    total_train_step = 0  # 初始化训练步数为0
     # 记录测试的次数
-    total_test_step = 0
+    total_test_step = 0  # 初始化测试步数为0
     # 训练的轮数
-    epochs = 1
+    epochs = 500  # 设置训练轮数为500
 
-    best_accuracy = 0.0
+    best_accuracy = 0.0  # 初始化最佳准确率为0.0
 
-    for epoch in range(epochs):
-        print("-------第{}轮训练开始-------".format(epoch + 1))
+    for epoch in range(epochs):  # 循环遍历每个epoch
+        print("-------第{}轮训练开始-------".format(epoch + 1))  # 打印当前轮次
+        logging.info("-------第{}轮训练开始-------".format(epoch + 1))  # 记录当前轮次到日志
 
         # 训练步骤开始
-        resnet50.train()
-        for data in train_dataloader:
-            imgs, targets = data
-            imgs = imgs.to(device)
-            targets = targets.to(device)
+        resnet50.train()  # 设置模型为训练模式
+        for data in train_dataloader:  # 遍历训练数据加载器
+            imgs, targets = data  # 获取图像和标签
+            imgs = imgs.to(device)  # 将图像移动到指定设备
+            targets = targets.to(device)  # 将标签移动到指定设备
 
-            outputs = resnet50(imgs)
-            loss = loss_fn(outputs, targets)
+            outputs = resnet50(imgs)  # 获取模型预测输出
+            loss = loss_fn(outputs, targets)  # 计算损失
 
             # 优化器优化模型
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            optimizer.zero_grad()  # 清零梯度
+            loss.backward()  # 反向传播计算梯度
+            optimizer.step()  # 更新模型参数
 
-            total_train_step += 1
-            if total_train_step % 100 == 0:
-                print("训练次数：{}, Loss: {:.4f}".format(total_train_step, loss.item()))
+            total_train_step += 1  # 增加训练步数
+            if total_train_step % 100 == 0:  # 如果当前训练步数是100的倍数
+                print("训练次数：{}, Loss: {:.4f}".format(total_train_step, loss.item()))  # 打印训练次数和损失
+                logging.info("训练次数：{}, Loss: {:.4f}".format(total_train_step, loss.item()))  # 记录训练次数和损失到日志
 
         # 测试集
-        resnet50.eval()
-        total_test_loss = 0
-        correct = 0
+        resnet50.eval()  # 设置模型为评估模式
+        total_test_loss = 0  # 初始化测试损失为0
+        correct = 0  # 初始化正确分类的数量为0
 
-        with torch.no_grad():
-            for data in test_dataloader:
-                imgs, targets = data
-                imgs = imgs.to(device)
-                targets = targets.to(device)
+        with torch.no_grad():  # 关闭梯度计算
+            for data in test_dataloader:  # 遍历测试数据加载器
+                imgs, targets = data  # 获取图像和标签
+                imgs = imgs.to(device)  # 将图像移动到指定设备
+                targets = targets.to(device)  # 将标签移动到指定设备
 
-                outputs = resnet50(imgs)
-                loss = loss_fn(outputs, targets)
-                total_test_loss += loss.item()
+                outputs = resnet50(imgs)  # 获取模型预测输出
+                loss = loss_fn(outputs, targets)  # 计算损失
+                total_test_loss += loss.item()  # 累加批量损失
 
-                _, predicted = torch.max(outputs, 1)
-                correct += (predicted == targets).sum().item()
-                total_test_step += 1
+                _, predicted = torch.max(outputs, 1)  # 获取预测类别
+                correct += (predicted == targets).sum().item()  # 统计正确分类的数量
+                total_test_step += 1  # 增加测试步数
 
-        average_test_loss = total_test_loss / len(test_dataloader)
-        accuracy = correct / test_data_size
+        average_test_loss = total_test_loss / len(test_dataloader)  # 平均每个样本的损失
+        accuracy = correct / test_data_size  # 计算准确率
 
         print(
-            "测试次数：{}, 测试Loss: {:.4f}, 准确率: {:.4f}%".format(total_test_step, average_test_loss, accuracy * 100))
+            "测试次数：{}, 测试Loss: {:.4f}, 准确率: {:.4f}%".format(total_test_step, average_test_loss, accuracy * 100))  # 打印测试结果
+        logging.info(
+            "测试次数：{}, 测试Loss: {:.4f}, 准确率: {:.4f}%".format(total_test_step, average_test_loss, accuracy * 100))  # 记录测试结果到日志
 
         # 保存最佳模型
-        if accuracy > best_accuracy:
-            best_accuracy = accuracy
-            torch.save(resnet50.state_dict(), 'best_resnet50.pth')
-            print(f"保存了更好的模型，准确率为 {accuracy * 100:.4f}%")
+        if accuracy > best_accuracy:  # 如果当前准确率高于最佳准确率
+            best_accuracy = accuracy  # 更新最佳准确率
+            checkpoint_path = f'best_resnet50_epoch_{epoch+1}_acc_{accuracy*100:.4f}.pth'  # 构建检查点文件路径
+            torch.save({
+                'epoch': epoch + 1,  # 保存当前epoch
+                'model_state_dict': resnet50.state_dict(),  # 保存模型状态字典
+                'optimizer_state_dict': optimizer.state_dict(),  # 保存优化器状态字典
+                'loss': loss.item(),  # 保存当前损失
+                'accuracy': accuracy  # 保存当前准确率
+            }, checkpoint_path)  # 保存检查点
+            print(f"保存了更好的模型，准确率为 {accuracy * 100:.4f}%, 路径为 {checkpoint_path}")  # 打印保存信息
+            logging.info(f"保存了更好的模型，准确率为 {accuracy * 100:.4f}%, 路径为 {checkpoint_path}")  # 记录保存信息到日志
 
-    print("训练完成")
-
+    print("训练完成")  # 打印训练完成信息
+    logging.info("训练完成")  # 记录训练完成信息到日志
 
 if __name__ == '__main__':
-    main()
+    main()  # 运行主函数
 
 
