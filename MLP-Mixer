@@ -1,6 +1,7 @@
 from torch import nn
 from torch.nn import functional as F
 import os  # 导入os模块，用于文件和目录操作
+import torch  # 导入torch库，用于构建神经网络
 import torchvision  # 导入torchvision库，用于数据集和预训练模型
 from torch.utils.data import DataLoader  # 导入DataLoader，用于加载数据
 from torchvision import datasets, transforms  # 导入torchvision的datasets和transforms模块，用于数据集和数据转换
@@ -122,103 +123,107 @@ class MLPMixer(nn.Module):
         logits = self.classifier(embedding)
         return logits
 
-# 固定随机种子以保证结果可复现性
-seed = 42
-random.seed(seed)
-np.random.seed(seed)
-torch.manual_seed(seed)
-if torch.cuda.is_available():
-    torch.cuda.manual_seed_all(seed)
+def main():
+    # 固定随机种子以保证结果可复现性
+    seed = 42
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
-# 设置日志记录
-logging.basicConfig(filename='training.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    # 设置日志记录
+    logging.basicConfig(filename='training.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# 定义运行设备
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-logging.info(f'使用设备: {device}')
+    # 定义运行设备
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logging.info(f'使用设备: {device}')
 
-# 数据预处理
-transform = transforms.Compose([
-    transforms.Resize((256, 256)),  # 调整图像大小为 256x256
-    transforms.ToTensor(),  # 将图像转换为张量
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # 归一化图像
-])
+    # 数据预处理
+    transform = transforms.Compose([
+        transforms.Resize((256, 256)),  # 调整图像大小为 256x256
+        transforms.ToTensor(),  # 将图像转换为张量
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # 归一化图像
+    ])
 
-# 加载数据集
-train_dataset = datasets.ImageFolder(root=r'D:\resnet\supervised_fault_classification\defect_supervised\glass-insulator\train', transform=transform)
-val_dataset = datasets.ImageFolder(root=r'D:\resnet\supervised_fault_classification\defect_supervised\glass-insulator\val', transform=transform)
+    # 加载数据集
+    train_dataset = datasets.ImageFolder(root=r'D:\resnet\supervised_fault_classification\defect_supervised\glass-insulator\train', transform=transform)
+    val_dataset = datasets.ImageFolder(root=r'D:\resnet\supervised_fault_classification\defect_supervised\glass-insulator\val', transform=transform)
 
-# 创建数据加载器
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
+    # 创建数据加载器
+    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
 
-# 定义模型
-model = MLPMixer(image_size=256, patch_size=16, in_channels=3, num_features=128, expansion_factor=2, num_layers=8,
-                 num_classes=len(train_dataset.classes), dropout=0.5)
-model.to(device)
-logging.info('模型已初始化')
+    # 定义模型
+    model = MLPMixer(image_size=256, patch_size=16, in_channels=3, num_features=128, expansion_factor=2, num_layers=8,
+                     num_classes=len(train_dataset.classes), dropout=0.5)
+    model.to(device)
+    logging.info('模型已初始化')
 
-# 定义损失函数和优化器
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
-logging.info('损失函数和优化器已设置')
+    # 定义损失函数和优化器
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    logging.info('损失函数和优化器已设置')
 
-# 训练循环
-num_epochs = 1
-best_val_acc = 0.0
+    # 训练循环
+    num_epochs = 1
+    best_val_acc = 0.0
 
-for epoch in range(num_epochs):
-    model.train()
-    running_loss = 0.0
-    correct_train = 0
-    total_train = 0
+    for epoch in range(num_epochs):
+        model.train()
+        running_loss = 0.0
+        correct_train = 0
+        total_train = 0
 
-    for inputs, labels in train_loader:
-        inputs, labels = inputs.to(device), labels.to(device)
-
-        optimizer.zero_grad()
-        outputs = model(inputs)
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
-
-        running_loss += loss.item() * inputs.size(0)
-        _, predicted = torch.max(outputs.data, 1)
-        total_train += labels.size(0)
-        correct_train += (predicted == labels).sum().item()
-
-    epoch_loss = running_loss / total_train
-    epoch_acc = correct_train / total_train
-
-    logging.info(f'Epoch [{epoch + 1}/{num_epochs}], 训练损失: {epoch_loss:.4f}, 训练准确率: {epoch_acc:.4f}')
-    print(f'Epoch [{epoch + 1}/{num_epochs}], 训练损失: {epoch_loss:.4f}, 训练准确率: {epoch_acc:.4f}')
-
-    # 验证
-    model.eval()
-    correct_val = 0
-    total_val = 0
-
-    with torch.no_grad():
-        for inputs, labels in val_loader:
+        for inputs, labels in train_loader:
             inputs, labels = inputs.to(device), labels.to(device)
 
+            optimizer.zero_grad()
             outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+
+            running_loss += loss.item() * inputs.size(0)
             _, predicted = torch.max(outputs.data, 1)
-            total_val += labels.size(0)
-            correct_val += (predicted == labels).sum().item()
+            total_train += labels.size(0)
+            correct_train += (predicted == labels).sum().item()
 
-    epoch_val_acc = correct_val / total_val
-    logging.info(f'Epoch [{epoch + 1}/{num_epochs}], 验证准确率: {epoch_val_acc:.4f}')
-    print(f'Epoch [{epoch + 1}/{num_epochs}], 验证准确率: {epoch_val_acc:.4f}')
+        epoch_loss = running_loss / total_train
+        epoch_acc = correct_train / total_train
 
-    # 保存最佳模型
-    if epoch_val_acc > best_val_acc:
-        best_val_acc = epoch_val_acc
-        checkpoint_path = f'model_epoch_{epoch + 1}_acc_{epoch_val_acc:.4f}.pth'
-        torch.save(model.state_dict(), checkpoint_path)
-        logging.info(f'保存最佳模型到 {checkpoint_path}')
+        logging.info(f'Epoch [{epoch + 1}/{num_epochs}], 训练损失: {epoch_loss:.4f}, 训练准确率: {epoch_acc:.4f}')
+        print(f'Epoch [{epoch + 1}/{num_epochs}], 训练损失: {epoch_loss:.4f}, 训练准确率: {epoch_acc:.4f}')
 
-print('训练完成')
+        # 验证
+        model.eval()
+        correct_val = 0
+        total_val = 0
+
+        with torch.no_grad():
+            for inputs, labels in val_loader:
+                inputs, labels = inputs.to(device), labels.to(device)
+
+                outputs = model(inputs)
+                _, predicted = torch.max(outputs.data, 1)
+                total_val += labels.size(0)
+                correct_val += (predicted == labels).sum().item()
+
+        epoch_val_acc = correct_val / total_val
+        logging.info(f'Epoch [{epoch + 1}/{num_epochs}], 验证准确率: {epoch_val_acc:.4f}')
+        print(f'Epoch [{epoch + 1}/{num_epochs}], 验证准确率: {epoch_val_acc:.4f}')
+
+        # 保存最佳模型
+        if epoch_val_acc > best_val_acc:
+            best_val_acc = epoch_val_acc
+            checkpoint_path = f'model_epoch_{epoch + 1}_acc_{epoch_val_acc:.4f}.pth'
+            torch.save(model.state_dict(), checkpoint_path)
+            logging.info(f'保存最佳模型到 {checkpoint_path}')
+
+    print('训练完成')
+
+if __name__ == "__main__":
+    main()
 
 
 
