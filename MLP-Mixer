@@ -1,7 +1,6 @@
 from torch import nn
 from torch.nn import functional as F
 import os  # 导入os模块，用于文件和目录操作
-import torch  # 导入torch库，用于构建神经网络
 import torchvision  # 导入torchvision库，用于数据集和预训练模型
 from torch.utils.data import DataLoader  # 导入DataLoader，用于加载数据
 from torchvision import datasets, transforms  # 导入torchvision的datasets和transforms模块，用于数据集和数据转换
