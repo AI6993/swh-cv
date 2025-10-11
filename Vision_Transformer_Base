@@ -1,0 +1,188 @@
+import os
+import torch
+import torchvision
+from torch import nn
+from torch.utils.data import DataLoader
+from torchvision import models, transforms
+import timm  # 导入timm库
+import logging
+
+# 设置随机种子以确保结果可重复
+torch.manual_seed(42)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(42)
+
+# 配置日志记录
+logging.basicConfig(filename='training.log', level=logging.INFO,
+                    format='%(asctime)s - %(levelname)s - %(message)s')
+
+# 数据预处理 - 针对ViT的标准化参数
+data_transform = {
+    'train': transforms.Compose([
+        transforms.RandomResizedCrop(224),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])  # ViT常用的标准化参数
+    ]),
+    'val': transforms.Compose([
+        transforms.Resize(256),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])  # ViT常用的标准化参数
+    ]),
+}
+
+
+def main():
+    # 加载本地数据集
+    train_dir = r'F:\AI\cv\UAV-Based Power Equipment Classification (UPEC)\Dataset\supervised_fault_classification\defect_supervised\glass-insulator\train'
+    test_dir = r'F:\AI\cv\UAV-Based Power Equipment Classification (UPEC)\Dataset\supervised_fault_classification\defect_supervised\glass-insulator\val'
+
+    # 加载训练数据集
+    train_data = torchvision.datasets.ImageFolder(root=train_dir, transform=data_transform["train"])
+    train_dataloader = DataLoader(train_data, batch_size=4, shuffle=True, num_workers=0)
+
+    # 加载测试集数据
+    test_data = torchvision.datasets.ImageFolder(root=test_dir, transform=data_transform["val"])
+    test_dataloader = DataLoader(test_data, batch_size=4, shuffle=False, num_workers=0)
+
+    train_data_size = len(train_data)
+    test_data_size = len(test_data)
+    print("The size of Train_data is {}".format(train_data_size))
+    logging.info("The size of Train_data is {}".format(train_data_size))
+    print("The size of Test_data is {}".format(test_data_size))
+    logging.info("The size of Test_data is {}".format(test_data_size))
+
+    # 使用timm库加载预训练的Vision Transformer Base模型
+    vit_model = timm.create_model('vit_base_patch16_224', pretrained=False)
+
+    # 获取分类头的输入特征数
+    num_features = vit_model.head.in_features
+
+    # 冻结模型的大部分参数（只训练最后几层）
+    for name, param in vit_model.named_parameters():
+        if 'head' not in name and 'blocks.11' not in name and 'blocks.10' not in name:  # 只解冻最后两个block和head
+            param.requires_grad = False
+        else:
+            param.requires_grad = True
+
+    # 修改分类头以适应新的类别数量
+    vit_model.head = nn.Sequential(
+        nn.Linear(num_features, 512),
+        nn.ReLU(),
+        nn.Dropout(0.3),
+        nn.Linear(512, len(train_data.classes)),
+        nn.LogSoftmax(dim=1)
+    )
+
+    # 将模型移动到指定设备（GPU或CPU）
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    vit_model.to(device)
+
+    print(f"使用设备: {device}")
+    print(f"类别数量: {len(train_data.classes)}")
+    logging.info(f"使用Vision Transformer Base模型，类别数量: {len(train_data.classes)}")
+
+    # 定义损失函数
+    loss_fn = nn.CrossEntropyLoss().to(device)
+
+    # 定义优化器 - 使用较小的学习率，因为ViT对学习率比较敏感
+    learning_rate = 1e-4
+    optimizer = torch.optim.AdamW(
+        filter(lambda p: p.requires_grad, vit_model.parameters()),
+        lr=learning_rate,
+        weight_decay=0.01
+    )
+
+    # 学习率调度器
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100)
+
+    # 设置网络训练的一些参数
+    total_train_step = 0
+    total_test_step = 0
+    epochs = 100
+    best_accuracy = 0.0
+
+    for epoch in range(epochs):
+        print("-------第{}轮训练开始-------".format(epoch + 1))
+        logging.info("-------第{}轮训练开始-------".format(epoch + 1))
+
+        # 训练步骤开始
+        vit_model.train()
+        train_loss = 0.0
+        for data in train_dataloader:
+            imgs, targets = data
+            imgs = imgs.to(device)
+            targets = targets.to(device)
+
+            outputs = vit_model(imgs)
+            loss = loss_fn(outputs, targets)
+
+            # 优化器优化模型
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            total_train_step += 1
+            train_loss += loss.item()
+
+            if total_train_step % 100 == 0:
+                print("训练次数：{}, Loss: {:.4f}".format(total_train_step, loss.item()))
+                logging.info("训练次数：{}, Loss: {:.4f}".format(total_train_step, loss.item()))
+
+        # 更新学习率
+        scheduler.step()
+        current_lr = scheduler.get_last_lr()[0]
+
+        print(f"第{epoch + 1}轮训练平均Loss: {train_loss / len(train_dataloader):.4f}, 学习率: {current_lr:.6f}")
+        logging.info(f"第{epoch + 1}轮训练平均Loss: {train_loss / len(train_dataloader):.4f}, 学习率: {current_lr:.6f}")
+
+        # 测试集
+        vit_model.eval()
+        total_test_loss = 0
+        correct = 0
+
+        with torch.no_grad():
+            for data in test_dataloader:
+                imgs, targets = data
+                imgs = imgs.to(device)
+                targets = targets.to(device)
+
+                outputs = vit_model(imgs)
+                loss = loss_fn(outputs, targets)
+                total_test_loss += loss.item()
+
+                _, predicted = torch.max(outputs, 1)
+                correct += (predicted == targets).sum().item()
+                total_test_step += 1
+
+        average_test_loss = total_test_loss / len(test_dataloader)
+        accuracy = correct / test_data_size
+
+        print(
+            "测试次数：{}, 测试Loss: {:.4f}, 准确率: {:.4f}%".format(total_test_step, average_test_loss, accuracy * 100))
+        logging.info(
+            "测试次数：{}, 测试Loss: {:.4f}, 准确率: {:.4f}%".format(total_test_step, average_test_loss, accuracy * 100))
+
+        # 保存最佳模型
+        if accuracy > best_accuracy:
+            best_accuracy = accuracy
+            checkpoint_path = f'best_vit_base_epoch_{epoch + 1}_acc_{accuracy * 100:.4f}.pth'
+            torch.save({
+                'epoch': epoch + 1,
+                'model_state_dict': vit_model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
+                'loss': loss.item(),
+                'accuracy': accuracy,
+                'classes': train_data.classes
+            }, checkpoint_path)
+            print(f"保存了更好的模型，准确率为 {accuracy * 100:.4f}%, 路径为 {checkpoint_path}")
+            logging.info(f"保存了更好的模型，准确率为 {accuracy * 100:.4f}%, 路径为 {checkpoint_path}")
+
+    print("训练完成，最佳准确率: {:.4f}%".format(best_accuracy * 100))
+    logging.info("训练完成，最佳准确率: {:.4f}%".format(best_accuracy * 100))
+
+
+if __name__ == '__main__':
+    main()
